@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  mininet:
+    image: iwaseyusuke/mininet
+    container_name: mininet
+    privileged: true
+    environment:
+      DISPLAY: ${DISPLAY}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /lib/modules:/lib/modules
+      - ./scripts:/scripts
+    networks:
+      - sdnnw
+    stdin_open: true
+    tty: true
+
+  floodlight:
+    build:
+      context: .
+      dockerfile: Dockerfile  # Point to your custom Dockerfile
+    image: custom/floodlight:latest
+    container_name: floodlight
+    volumes:
+      - ./scripts:/scripts                # Mount custom scripts directory
+      - ./logback.xml:/floodlight/logback.xml  # Mount the custom logback.xml for logging
+    networks:
+      - sdnnw
+    ports:
+      - "6653:6653"
+      - "8080:8080"
+    stdin_open: true
+    tty: true
+
+networks:
+  sdnnw:
+    driver: bridge

@@ -1,0 +1,257 @@
+Install Docker
+
+sudo apt-get update
+sudo apt-get install -y docker.io
+
+
+
+Run Mininet in a Docker Container
+
+docker pull iwaseyusuke/mininet
+docker run -it --rm --privileged \
+  --name mininet \
+  --network sdnnw \
+  -e DISPLAY \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v /lib/modules:/lib/modules \
+  iwaseyusuke/mininet
+
+Verify Mininet
+mn --test pingall
+
+
+Set Up Floodlight SDN Controller
+
+image: docker pull latarc/floodlight
+run: docker run -it --rm --name floodlight --network sdnnw -p 6653:6653 -p 8080:8080 latarc/floodlight
+verify : http://localhost:8080/ui/pages/index.html
+
+mn --controller=remote,ip=floodlight,port=6653 --topo=single,3
+mn --controller=remote,ip=floodlight,port=6653 --topo=tree,depth=2,fanout=2
+
+docker network create sdnnw
+
+curl http://localhost:8080/wm/core/controller/switches/json
+
+health:/wm/core/health/json
+
+
+ mn --custom /scripts/mininet-topology.py --topo customtopo --controller=remote,ip="floodlight"
+
+mininet> h1 iperf -s &
+mininet> h2 iperf -c h1 -t 30
+
+mininet> h4 iperf -s &
+mininet> h1 iperf -c h4 -u -t 30 > h1_perf_output.txt &
+mininet> h2 iperf -c h4 -u -t 30 > h2_perf_output.txt &
+
+tcpdump -i s7-eth2 -w s7-eth2.pcap &
+tcpdump -i s7-eth1 -w s7-eth1.pcap &
+
+mininet> h4 iperf -s &
+mininet> h1 ping h4 > h1_ping_output.txt &
+mininet> h2 ping h4 > h1_ping_output.txt &
+mininet> h1 cat h1_ping_output.txt
+mininet> h1 ps
+mininet> h1 kill 5678
+
+
+mininet> h1 iperf -c h4 -t 30 &
+mininet> h1 iperf -c h4 -t 30 > h1_iperf_output.txt &
+mininet> h1 cat h1_iperf_output.txt
+mininet> fg
+mininet> h4 iperf -s
+
+mininet> h1 jobs
+mininet> fg %1
+mininet> h4 tcpdump -i h4-eth0
+
+from mininet.net import Mininet
+
+# Create a simple network
+net = Mininet()
+h1 = net.addHost('h1')
+h2 = net.addHost('h2')
+h4 = net.addHost('h4')
+net.addLink(h1, h4)
+net.addLink(h2, h4)
+net.start()
+
+# Start pings in parallel
+h1.cmd('ping -c 5 h4 &')  # Ping from h1 to h4
+h2.cmd('ping -c 5 h4 &')  # Ping from h2 to h4
+
+# Wait for completion and print results
+print(h1.cmd('ping -c 5 h4'))
+print(h2.cmd('ping -c 5 h4'))
+
+net.stop()
+
+To identify interface in switches: mininet> sh ovs-vsctl show
+net can be used to identify which switches to interfaces
+
+tail -f floodlight.log
+
+version: '3.8'
+
+services:
+  mininet:
+    image: iwaseyusuke/mininet
+    container_name: mininet
+    privileged: true
+    environment:
+      DISPLAY: ${DISPLAY}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /lib/modules:/lib/modules
+      - ./scripts:/scripts
+    networks:
+      - sdnnw
+    stdin_open: true
+    tty: true
+
+  floodlight:
+    image: latarc/floodlight
+    container_name: floodlight
+    volumes:
+      - ./scripts:/scripts                # Mount custom scripts directory
+      - ./logback.xml:/floodlight/logback.xml  # Mount the custom logback.xml for logging
+      - ./logs:/var/log/floodlight        # Mount the logs directory to persist logs on the host
+    networks:
+      - sdnnw
+    ports:
+      - "6653:6653"  # OpenFlow port
+      - "8080:8080"  # Floodlight Web UI port
+    stdin_open: true
+    tty: true
+    command: >
+      /bin/bash -c "cd /floodlight &&
+      cp /scripts/LoadBalancer.java src/main/java/net/floodlightcontroller/loadbalancer/ &&
+      ant && java -jar target/floodlight.jar"
+
+networks:
+  sdnnw:
+    driver: bridge
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- Define FileAppender to write logs to a specific file -->
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>/var/log/floodlight/floodlight.log</file>  <!-- Specify log file location -->
+        <append>true</append> <!-- Appends logs to the file -->
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} %-5level [%logger{36}] %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Define ConsoleAppender to log to the console -->
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} %-5level [%logger{36}] %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Specify logger for Floodlight and your custom modules -->
+    <logger name="net.floodlightcontroller.loadbalancer" level="INFO">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="FILE" />
+    </logger>
+
+    <!-- General logging configuration for Floodlight -->
+    <root level="INFO">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="FILE" />
+    </root>
+</configuration>
+
+
+1. get inside mininet container
+docker exec -it mininet bash
+
+2. create the setup
+mn --custom /scripts/mininet-topology.py --topo customtopo --controller=remote,ip="floodlight"
+
+3. open 2 new terminals to AWS host and log into mininet thereto capture packets
+docker exec -it mininet bash
+tcpdump -i s7-eth2 -w s7-eth2.pcap &
+tcpdump -i s7-eth1 -w s7-eth1.pcap &
+
+4. from the 1st mininet terminal send packets
+mininet> h4 iperf -s &
+mininet> h1 iperf -c h4 -u -t 30 > h1_perf_output.txt &
+mininet> h2 iperf -c h4 -u -t 30 > h2_perf_output.txt &
+
+5. You can open a new terminal to AWS host and log into mininet there
+docker exec -it mininet bash
+check the two files h1_perf_output.txt and  h2_perf_output.txt . you will see only one has data. you can use command "ls -lhrt" to see the size of files
+you can also use "cat h2_perf_output.txt" and "cat h1_perf_output.txt"( indicates bandwidth is low typically less than  15 Gbps)
+
+6. use docker cp to transfer from mininet container to AWS host machine ( select the appropriate file which has data)
+ docker cp mininet:/root/s7-eth1.pcap . 
+
+7. scp the file from AWS to local
+ scp -i "<key_file>" ubuntu@<machine_address>:/home/ubuntu/s7-eth1.pcap .
+
+8. open the packet in wireshark and use filter ip.dst == 10.0.0.4
+you will see both the machines h1 and h2 will be using same port of switch 7, the other port will not have traffic
+
+
+thrift issue
+
+apk update
+apk add build-base cmake git autoconf automake libtool
+git clone https://github.com/apache/thrift.git
+cd thrift
+git checkout 0.13.0
+apk add bison
+apk add flex
+
+./bootstrap.sh
+./configure
+make
+make install
+
+curl http://localhost:8080/wm/device/
+
+h1 ifconfig h1-eth0 10.0.0.1/24 up
+
+import requests
+import json
+
+# Define the flow
+flow = {
+    "switch": "00:00:00:00:00:00:00:01",
+    "name": "flow1",
+    "cookie": "0",
+    "priority": "32768",
+    "in_port": "1",
+    "eth_type": "0x0800",
+    "ipv4_src": "10.0.0.1",
+    "ipv4_dst": "10.0.0.2",
+    "eth_src": "00:00:00:00:00:01",
+    "eth_dst": "00:00:00:00:00:02",
+    "active": "true",
+    "actions": "output=2"
+}
+
+# Push the flow to the controller
+url = "http://localhost:8080/wm/staticflowpusher/json"
+response = requests.post(url, data=json.dumps(flow))
+
+# Check the response
+if response.status_code == 200:
+    print("Flow pushed successfully")
+else:
+    print(f"Error: {response.status_code}, {response.text}")
+
+
+API
+
+curl http://localhost:8080/wm/core/switch/00:00:00:00:00:00:00:01/features/json | jq
+curl http://localhost:8080/wm/core/controller/switches/json | jq
+curl http://localhost:8080/wm/core/switch/00:00:00:00:00:00:00:01/port/json | jq
+curl http://localhost:8080/wm/core/switch/00:00:00:00:00:00:00:02/flow/json | jq
+curl -X POST http://localhost:8080/wm/statistics/config/enable/json
